@@ -704,6 +704,24 @@ void otBorderRoutingSetMultiAilCallback(otInstance                     *aInstanc
                                         void                           *aContext);
 
 /**
+ * Iterates through the RA-discovered NAT64 prefix table.
+ *
+ * Requires `OPENTHREAD_CONFIG_NAT64_BORDER_ROUTING_ENABLE`
+ *
+ * @param[in]     aInstance    The OpenThread instance.
+ * @param[in,out] aIterator    A pointer to the iterator.
+ * @param[out]    aEntry       A pointer to the entry to populate.
+ *
+ * @retval OT_ERROR_NONE          Iterated to the next NAT64 prefix entry, @p aEntry and @p aIterator are updated.
+ * @retval OT_ERROR_NOT_FOUND     No more entries in the table.
+ * @retval OT_ERROR_INVALID_ARGS  The iterator is invalid (used to iterate over other entry types).
+ *
+ */
+otError otBorderRoutingGetNextNat64PrefixEntry(otInstance                         *aInstance,
+                                               otBorderRoutingPrefixTableIterator *aIterator,
+                                               otBorderRoutingNat64PrefixEntry    *aEntry);
+
+/**
  * Iterates over the Recursive DNS Server (RDNSS) address entries.
  *
  * Address entries are discovered by processing the RDNSS options within received Router Advertisement messages from
