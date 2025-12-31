@@ -55,7 +55,7 @@ wait_for()
     local count=10
     while [ ${count} -ne 0 ]; do
         count=$((count - 1))
-        eval sudo "${OT_CTL_PATH}" "${command}" | grep -q "${expect}" && return 0
+        eval sudo "${OT_CTL_PATH}" ${command} | grep -q "${expect}" && return 0
         sleep 1
     done
 
