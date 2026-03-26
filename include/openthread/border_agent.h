@@ -258,10 +258,12 @@ otError otBorderAgentGetMeshCoPServiceTxtData(otInstance *aInstance, otBorderAge
 /**
  * Maximum string length of base name used in `otBorderAgentSetMeshCoPServiceBaseName()`.
  *
- * The full DNS label is constructed by appending the last two bytes of the Extended Address of the device
- * (as 4-character hex digits prefixed with " #") to the given base name.
+ * The full DNS label is constructed by appending the hex representation of the Extended Address of the device
+ * (prefixed with "#") to the given base name. The length of the suffix is determined by
+ * `OT_BORDER_AGENT_MESHCOP_SERVICE_NAME_SUFFIX_LENGTH`.
  */
-#define OT_BORDER_AGENT_MESHCOP_SERVICE_BASE_NAME_MAX_LENGTH (OT_DNS_MAX_LABEL_SIZE - 7)
+#define OT_BORDER_AGENT_MESHCOP_SERVICE_BASE_NAME_MAX_LENGTH \
+    (OT_DNS_MAX_LABEL_SIZE - 2 - (2 * OPENTHREAD_CONFIG_BORDER_AGENT_MESHCOP_SERVICE_NAME_SUFFIX_LENGTH))
 
 /**
  * Sets the base name to construct the service instance name used when advertising the mDNS `_meshcop._udp` service by
@@ -276,8 +278,9 @@ otError otBorderAgentGetMeshCoPServiceTxtData(otInstance *aInstance, otBorderAge
  * Per the Thread specification, the service instance should be a user-friendly name identifying the device model or
  * product. A recommended format is "VendorName ProductName".
  *
- * To construct the full name and ensure name uniqueness, the OpenThread Border Agent module will append the Extended
- * Address of the device (as 16-character hex digits) to the given base name.
+ * To construct the full name and ensure name uniqueness, the OpenThread Border Agent module will append a suffix (hex
+ * representation of the device's Extended Address prefixed with "#") to the given base name. The length of the suffix
+ * is determined by `OT_BORDER_AGENT_MESHCOP_SERVICE_NAME_SUFFIX_LENGTH`.
  *
  * Note that the same name will be used for the ephemeral key service `_meshcop-e._udp` when the ephemeral key feature
  * is enabled and used.

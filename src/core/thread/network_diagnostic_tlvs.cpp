@@ -38,6 +38,72 @@
 namespace ot {
 namespace NetworkDiagnostic {
 
+//---------------------------------------------------------------------------------------------------------------------
+// ChildTableTlvEntry
+
+#if OPENTHREAD_FTD
+
+void ChildTableTlvEntry::InitFrom(const Child &aChild)
+{
+    uint16_t encoded = 0;
+
+    //             1                   0
+    //   5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0
+    //  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    //  |TmoutExp |ILQ|     Child ID    |
+    //  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+    WriteBits<uint16_t, kTimeoutMask>(encoded, DetermineExponentFromTimeout(aChild.GetTimeout()));
+    WriteBits<uint16_t, kIlqMask>(encoded, aChild.GetLinkQualityIn());
+    WriteBits<uint16_t, kChildIdMask>(encoded, Mle::ChildIdFromRloc16(aChild.GetRloc16()));
+
+    mTimeoutIlqChildId = BigEndian::HostSwap16(encoded);
+    mMode              = aChild.GetDeviceMode().Get();
+}
+
+uint8_t ChildTableTlvEntry::DetermineExponentFromTimeout(uint32_t aTimeout)
+{
+    // The timeout is expressed as `2^(exponent - 4)` seconds. The
+    // parent fills the exponent field with the closest
+    // ceiling value based on the Child Timeout value.
+
+    uint8_t exponent;
+
+    for (exponent = kTimeoutExponentMin; exponent < kTimeoutExponentMax; exponent++)
+    {
+        if (DetermineTimeoutFromExponent(exponent) >= aTimeout)
+        {
+            break;
+        }
+    }
+
+    return exponent;
+}
+
+#endif // OPENTHREAD_FTD
+
+uint32_t ChildTableTlvEntry::DetermineTimeoutFromExponent(uint8_t aExponent)
+{
+    aExponent = Clamp(aExponent, kTimeoutExponentMin, kTimeoutExponentMax);
+
+    return static_cast<uint32_t>(1U) << (aExponent - kTimeoutExponentMin);
+}
+
+void ChildTableTlvEntry::Parse(ParseInfo &aParseInfo) const
+{
+    uint16_t encoded = BigEndian::HostSwap16(mTimeoutIlqChildId);
+
+    ClearAllBytes(aParseInfo);
+
+    aParseInfo.mTimeout     = ReadBits<uint16_t, kTimeoutMask>(encoded);
+    aParseInfo.mLinkQuality = static_cast<LinkQuality>(ReadBits<uint16_t, kIlqMask>(encoded));
+    aParseInfo.mChildId     = ReadBits<uint16_t, kChildIdMask>(encoded);
+    Mle::DeviceMode(mMode).Get(aParseInfo.mMode);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// EnhancedRouteTlvEntry
+
 void EnhancedRouteTlvEntry::InitFrom(const Router &aRouter)
 {
     uint16_t data = 0;
@@ -68,6 +134,9 @@ void EnhancedRouteTlvEntry::Parse(ParseInfo &aParseInfo) const
 }
 
 #if OPENTHREAD_FTD
+
+//---------------------------------------------------------------------------------------------------------------------
+// ChildTlv
 
 void ChildTlv::InitFrom(const Child &aChild)
 {
@@ -103,6 +172,9 @@ void ChildTlv::InitFrom(const Child &aChild)
 #endif
 }
 
+//---------------------------------------------------------------------------------------------------------------------
+// RouterNeighborTlv
+
 void RouterNeighborTlv::InitFrom(const Router &aRouter)
 {
     Clear();
@@ -124,6 +196,9 @@ void RouterNeighborTlv::InitFrom(const Router &aRouter)
 
 #endif // OPENTHREAD_FTD
 
+//---------------------------------------------------------------------------------------------------------------------
+// AnswerTlv
+
 void AnswerTlv::Init(uint16_t aIndex, IsLastFlag aIsLastFlag)
 {
     SetType(kAnswer);
@@ -131,6 +206,44 @@ void AnswerTlv::Init(uint16_t aIndex, IsLastFlag aIsLastFlag)
 
     SetFlagsIndex((aIndex & kIndexMask) | (aIsLastFlag == kIsLast ? kIsLastFlag : 0));
 }
+
+//---------------------------------------------------------------------------------------------------------------------
+// MacCountersTlv
+
+void MacCountersTlv::Init(const Mac::Counters &aMacCounters)
+{
+    SetType(kMacCounters);
+    SetLength(sizeof(*this) - sizeof(Tlv));
+
+    mIfInUnknownProtos  = BigEndian::HostSwap32(aMacCounters.mRxOther);
+    mIfInErrors         = BigEndian::HostSwap32(aMacCounters.mRxErrNoFrame + aMacCounters.mRxErrUnknownNeighbor +
+                                                aMacCounters.mRxErrInvalidSrcAddr + aMacCounters.mRxErrSec +
+                                                aMacCounters.mRxErrFcs + aMacCounters.mRxErrOther);
+    mIfOutErrors        = BigEndian::HostSwap32(aMacCounters.mTxErrCca);
+    mIfInUcastPkts      = BigEndian::HostSwap32(aMacCounters.mRxUnicast);
+    mIfInBroadcastPkts  = BigEndian::HostSwap32(aMacCounters.mRxBroadcast);
+    mIfInDiscards       = BigEndian::HostSwap32(aMacCounters.mRxAddressFiltered + aMacCounters.mRxDestAddrFiltered +
+                                                aMacCounters.mRxDuplicated);
+    mIfOutUcastPkts     = BigEndian::HostSwap32(aMacCounters.mTxUnicast);
+    mIfOutBroadcastPkts = BigEndian::HostSwap32(aMacCounters.mTxBroadcast);
+    mIfOutDiscards      = BigEndian::HostSwap32(aMacCounters.mTxErrBusyChannel);
+}
+
+void MacCountersTlv::Read(MacCounters &aDiagMacCounters) const
+{
+    aDiagMacCounters.mIfInUnknownProtos  = BigEndian::HostSwap32(mIfInUnknownProtos);
+    aDiagMacCounters.mIfInErrors         = BigEndian::HostSwap32(mIfInErrors);
+    aDiagMacCounters.mIfOutErrors        = BigEndian::HostSwap32(mIfOutErrors);
+    aDiagMacCounters.mIfInUcastPkts      = BigEndian::HostSwap32(mIfInUcastPkts);
+    aDiagMacCounters.mIfInBroadcastPkts  = BigEndian::HostSwap32(mIfInBroadcastPkts);
+    aDiagMacCounters.mIfInDiscards       = BigEndian::HostSwap32(mIfInDiscards);
+    aDiagMacCounters.mIfOutUcastPkts     = BigEndian::HostSwap32(mIfOutUcastPkts);
+    aDiagMacCounters.mIfOutBroadcastPkts = BigEndian::HostSwap32(mIfOutBroadcastPkts);
+    aDiagMacCounters.mIfOutDiscards      = BigEndian::HostSwap32(mIfOutDiscards);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// MleCountersTlv
 
 void MleCountersTlv::Init(const Mle::Counters &aMleCounters)
 {

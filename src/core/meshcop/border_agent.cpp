@@ -80,6 +80,10 @@ Manager::Manager(Instance &aInstance)
 
     static_assert(sizeof(kDefaultBaseServiceName) - 1 <= kBaseServiceNameMaxLen,
                   "OPENTHREAD_CONFIG_BORDER_AGENT_MESHCOP_SERVICE_BASE_NAME is too long");
+
+    static_assert((OPENTHREAD_CONFIG_BORDER_AGENT_MESHCOP_SERVICE_NAME_SUFFIX_LENGTH >= 2) &&
+                      (OPENTHREAD_CONFIG_BORDER_AGENT_MESHCOP_SERVICE_NAME_SUFFIX_LENGTH <= OT_EXT_ADDRESS_SIZE),
+                  "OPENTHREAD_CONFIG_BORDER_AGENT_MESHCOP_SERVICE_NAME_SUFFIX_LENGTH must be between 2 and 8");
 #endif
 }
 
@@ -427,7 +431,13 @@ void Manager::ConstructServiceName(const char *aBaseName, Dns::Name::LabelBuffer
     StringWriter           writer(aNameBuffer, sizeof(Dns::Name::LabelBuffer));
     const Mac::ExtAddress &extAddr = Get<Mac::Mac>().GetExtAddress();
 
-    writer.Append("%.*s #%02X%02X", kBaseServiceNameMaxLen, aBaseName, extAddr.m8[6], extAddr.m8[7]);
+    writer.Append("%.*s #", kBaseServiceNameMaxLen, aBaseName);
+
+    for (uint8_t i = OT_EXT_ADDRESS_SIZE - OPENTHREAD_CONFIG_BORDER_AGENT_MESHCOP_SERVICE_NAME_SUFFIX_LENGTH;
+         i < OT_EXT_ADDRESS_SIZE; i++)
+    {
+        writer.Append("%02X", extAddr.m8[i]);
+    }
 }
 
 void Manager::RegisterService(void)
@@ -770,7 +780,7 @@ void Manager::CoapDtlsSession::HandleLeaderResponseToFwdTmf(const ForwardContext
 
     SuccessOrExit(error = aResult);
 
-    forwardMessage.Reset(NewPriorityMessage());
+    forwardMessage.Reset(NewNetPriorityMessage());
     VerifyOrExit(forwardMessage != nullptr, error = kErrorNoBufs);
 
     if (aResponse->GetCode() == Coap::kCodeChanged)
@@ -927,7 +937,7 @@ void Manager::CoapDtlsSession::SendErrorMessage(Error aError, const Coap::Token 
     OwnedPtr<Coap::Message> message;
     Coap::Message::Code     code;
 
-    message.Reset(NewPriorityMessage());
+    message.Reset(NewNetPriorityMessage());
     VerifyOrExit(message != nullptr, error = kErrorNoBufs);
 
     code = (aError == kErrorParse) ? Coap::kCodeBadRequest : Coap::kCodeInternalError;

@@ -65,6 +65,8 @@ PBBR_ALOC = Ipv6Addr(DEFAULT_MESH_LOCAL_PREFIX + PBBR_ALOC_IID)
 # Minimum value of the MLR Timeout parameter in the BBR Dataset
 MLR_TIMEOUT_MIN = 300
 
+THREAD_SERVICE_DATA_BBR = 0x01
+
 # Max response delay
 MLE_MAX_RESPONSE_DELAY = 1
 
@@ -175,6 +177,8 @@ NL_MAC_EXTENDED_ADDRESS_TLV = 1
 NL_RLOC16_TLV = 2
 NL_ML_EID_TLV = 3
 NL_STATUS_TLV = 4
+NL_TIMEOUT_TLV = 11
+NL_ACTIVE_TIMESTAMP_TLV = 14
 NL_TIME_SINCE_LAST_TRANSACTION_TLV = 6
 NL_ROUTER_MASK_TLV = 7
 NL_ND_OPTION_TLV = 8
@@ -347,6 +351,7 @@ WIRESHARK_OVERRIDE_PREFS = {
 }
 
 WIRESHARK_DECODE_AS_ENTRIES = {
+    'udp.port==53': 'dns',
     'udp.port==61631': 'coap',
     # SRP server ports for dissecting SRP requests and responses
     'udp.port==53535': 'dns',

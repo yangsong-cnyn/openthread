@@ -242,11 +242,11 @@ void        DiscoverNat64Prefix(const Ip6::Prefix &aPrefix);
 extern "C" {
 
 #if OPENTHREAD_CONFIG_LOG_OUTPUT == OPENTHREAD_CONFIG_LOG_OUTPUT_PLATFORM_DEFINED
-void otPlatLog(otLogLevel aLogLevel, otLogRegion aLogRegion, const char *aFormat, ...)
+#if OPENTHREAD_CONFIG_LOG_INSTANCE_AWARE_API_ENABLE
+void otPlatLogOutput(otInstance *, otLogLevel, const char *aLogLine) { printf("   %s\n", aLogLine); }
+#else
+void otPlatLog(otLogLevel, otLogRegion, const char *aFormat, ...)
 {
-    OT_UNUSED_VARIABLE(aLogLevel);
-    OT_UNUSED_VARIABLE(aLogRegion);
-
     va_list args;
 
     printf("   ");
@@ -255,6 +255,7 @@ void otPlatLog(otLogLevel aLogLevel, otLogRegion aLogRegion, const char *aFormat
     va_end(args);
     printf("\n");
 }
+#endif
 #endif
 
 //----------------------------------------------------------------------------------------------------------------------
@@ -287,14 +288,16 @@ uint32_t otPlatAlarmMilliGetNow(void) { return sNow; }
 //---------------------------------------------------------------------------------------------------------------------
 // otPlatInfraIf
 
-bool otPlatInfraIfHasAddress(uint32_t aInfraIfIndex, const otIp6Address *aAddress)
+bool otPlatInfraIfHasAddress(otInstance *aInstance, uint32_t aInfraIfIndex, const otIp6Address *aAddress)
 {
+    VerifyOrQuit(aInstance == sInstance);
     VerifyOrQuit(aInfraIfIndex == kInfraIfIndex);
 
     return AsCoreType(aAddress) == sInfraIfAddress;
 }
 
-otError otPlatInfraIfSendIcmp6Nd(uint32_t            aInfraIfIndex,
+otError otPlatInfraIfSendIcmp6Nd(otInstance         *aInstance,
+                                 uint32_t            aInfraIfIndex,
                                  const otIp6Address *aDestAddress,
                                  const uint8_t      *aBuffer,
                                  uint16_t            aBufferLength)
@@ -305,6 +308,7 @@ otError otPlatInfraIfSendIcmp6Nd(uint32_t            aInfraIfIndex,
     Log("otPlatInfraIfSendIcmp6Nd(aDestAddr: %s, aBufferLength:%u)", AsCoreType(aDestAddress).ToString().AsCString(),
         aBufferLength);
 
+    VerifyOrQuit(aInstance == sInstance);
     VerifyOrQuit(aInfraIfIndex == kInfraIfIndex);
 
     packet.Init(aBuffer, aBufferLength);

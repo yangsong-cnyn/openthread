@@ -116,10 +116,26 @@
  * Per the Thread specification, the service instance should be a user-friendly name identifying the device model or
  * product. A recommended format is "VendorName ProductName".
  *
- * The name MUST have a length less than or equal to `OT_BORDER_AGENT_MESHCOP_SERVICE_BASE_NAME_MAX_LENGTH` (47 chars).
+ * The name MUST have a length less than or equal to `OT_BORDER_AGENT_MESHCOP_SERVICE_BASE_NAME_MAX_LENGTH`.
  */
 #ifndef OPENTHREAD_CONFIG_BORDER_AGENT_MESHCOP_SERVICE_BASE_NAME
 #define OPENTHREAD_CONFIG_BORDER_AGENT_MESHCOP_SERVICE_BASE_NAME "OpenThread BR (unspecified vendor) "
+#endif
+
+/**
+ * @def OPENTHREAD_CONFIG_BORDER_AGENT_MESHCOP_SERVICE_NAME_SUFFIX_LENGTH
+ *
+ * Specifies the length of the suffix (in bytes) to append to the service instance name used when advertising the mDNS
+ * `_meshcop._udp` service by the Border Agent.
+ *
+ * The suffix is derived from the device's Extended Address.
+ *
+ * Supported values are 2 to 8, where 8 is the full size of an IEEE 802.15.4 Extended Address
+ *
+ * The last suffix-length bytes of the Extended Address are appended as an uppercase hex string with a '#' prefix.
+ */
+#ifndef OPENTHREAD_CONFIG_BORDER_AGENT_MESHCOP_SERVICE_NAME_SUFFIX_LENGTH
+#define OPENTHREAD_CONFIG_BORDER_AGENT_MESHCOP_SERVICE_NAME_SUFFIX_LENGTH 8
 #endif
 
 /**

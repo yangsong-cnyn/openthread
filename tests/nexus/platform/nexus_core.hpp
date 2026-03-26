@@ -65,17 +65,16 @@ public:
 
     void SaveTestInfo(const char *aFilename, Node *aLeaderNode = nullptr);
     void AddNetworkKey(const NetworkKey &aKey);
+    void AddTestVar(const char *aName, const char *aValue);
+    void AddOmrPrefixTestVar(const char *aName, Node &aNode);
     void SendAndVerifyEchoRequest(Node               &aSender,
                                   const Ip6::Address &aDestination,
                                   uint16_t            aPayloadSize     = 0,
-                                  uint8_t             aHopLimit        = 64,
+                                  uint8_t             aHopLimit        = Ip6::kDefaultHopLimit,
                                   uint32_t            aResponseTimeout = 1000);
 
     //- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
     // Used by platform implementation
-
-    void  SetActiveNode(Node *aNode) { mActiveNode = aNode; }
-    Node *GetActiveNode(void) { return mActiveNode; }
 
     void UpdateNextAlarmMilli(const Alarm &aAlarm);
     void UpdateNextAlarmMicro(const Alarm &aAlarm);
@@ -101,12 +100,20 @@ private:
         bool     mResponseReceived;
     };
 
+    struct TestVar
+    {
+        String<32> mName;
+        String<64> mValue;
+    };
+
     void Process(Node &aNode);
     void ProcessRadio(Node &aNode);
-    void ProcessMdns(Node &aNode);
+    void ProcessInfraIf(Node &aNode);
 #if OPENTHREAD_CONFIG_RADIO_LINK_TREL_ENABLE
     void ProcessTrel(Node &aNode);
 #endif
+
+    Node *FindNodeByInfraIfAddress(const Ip6::Address &aAddress);
 
     static void HandleIcmpResponse(void                *aContext,
                                    otMessage           *aMessage,
@@ -119,14 +126,13 @@ private:
     OwningList<Node>      mNodes;
     Pcap                  mPcap;
     Array<NetworkKey, 16> mNetworkKeys;
+    Array<TestVar, 128>   mTestVars;
     uint16_t              mCurNodeId;
     bool                  mPendingAction;
+    bool                  mSaveNodeLogs;
     uint64_t              mNow;
     uint64_t              mNextAlarmTime;
-    Node                 *mActiveNode;
 };
-
-void Log(const char *aFormat, ...) OT_TOOL_PRINTF_STYLE_FORMAT_ARG_CHECK(1, 2);
 
 } // namespace Nexus
 } // namespace ot

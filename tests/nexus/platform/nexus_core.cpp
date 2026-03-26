@@ -28,8 +28,8 @@
 
 #include "nexus_core.hpp"
 
+#include <cstdio>
 #include <cstdlib>
-#include <cstring>
 
 #include "mac_frame.h"
 #include "nexus_node.hpp"
@@ -43,10 +43,11 @@ bool  Core::sInUse = false;
 Core::Core(void)
     : mCurNodeId(0)
     , mPendingAction(false)
+    , mSaveNodeLogs(false)
     , mNow(0)
-    , mActiveNode(nullptr)
 {
     const char *pcapFile;
+    const char *saveLogs;
 
     VerifyOrQuit(!sInUse);
     sCore  = this;
@@ -59,6 +60,26 @@ Core::Core(void)
     if ((pcapFile != nullptr) && (pcapFile[0] != '\0'))
     {
         mPcap.Open(pcapFile);
+    }
+
+    saveLogs = getenv("OT_NEXUS_SAVE_LOGS");
+
+    if (saveLogs != nullptr)
+    {
+        static const char *kActivateStrings[] = {"1", "yes", "y", "true", "t", "on"};
+
+        bool activate = false;
+
+        for (const char *activateString : kActivateStrings)
+        {
+            if (StringMatch(saveLogs, activateString, kStringCaseInsensitiveMatch))
+            {
+                activate = true;
+                break;
+            }
+        }
+
+        mSaveNodeLogs = activate;
     }
 }
 
@@ -168,6 +189,23 @@ void Core::SaveTestInfo(const char *aFilename, Node *aLeaderNode)
     }
     fprintf(file, "  },\n");
 
+    fprintf(file, "  \"ethaddrs\": {\n");
+    for (Node &node : mNodes)
+    {
+        InfraIf::LinkLayerAddress mac;
+
+        node.mInfraIf.GetLinkLayerAddress(mac);
+        fprintf(file, "    \"%u\": \"", node.GetInstance().GetId());
+
+        for (uint8_t i = 0; i < mac.mLength; i++)
+        {
+            fprintf(file, "%02x%s", mac.mAddress[i], (i + 1 == mac.mLength) ? "" : ":");
+        }
+
+        fprintf(file, "\"%s\n", (&node == tail) ? "" : ",");
+    }
+    fprintf(file, "  },\n");
+
     fprintf(file, "  \"rloc16s\": {\n");
     for (Node &node : mNodes)
     {
@@ -224,7 +262,13 @@ void Core::SaveTestInfo(const char *aFilename, Node *aLeaderNode)
     {
         Ip6::Prefix prefix;
         prefix.Set(leaderNode->Get<Mle::Mle>().GetMeshLocalPrefix());
-        fprintf(file, "    \"mesh_local_prefix\": \"%s\"\n", prefix.ToString().AsCString());
+        fprintf(file, "    \"mesh_local_prefix\": \"%s\"%s\n", prefix.ToString().AsCString(),
+                mTestVars.IsEmpty() ? "" : ",");
+    }
+    for (const TestVar &var : mTestVars)
+    {
+        fprintf(file, "    \"%s\": \"%s\"%s\n", var.mName.AsCString(), var.mValue.AsCString(),
+                (&var == mTestVars.Back()) ? "" : ",");
     }
     fprintf(file, "  }\n");
 
@@ -239,6 +283,35 @@ exit:
 
 void Core::AddNetworkKey(const NetworkKey &aKey) { SuccessOrQuit(mNetworkKeys.PushBack(aKey)); }
 
+void Core::AddTestVar(const char *aName, const char *aValue)
+{
+    TestVar *var = mTestVars.PushBack();
+    VerifyOrQuit(var != nullptr);
+    var->mName.Clear().Append("%s", aName);
+    var->mValue.Clear().Append("%s", aValue);
+}
+
+void Core::AddOmrPrefixTestVar(const char *aName, Node &aNode)
+{
+#if OPENTHREAD_CONFIG_BORDER_ROUTING_ENABLE
+    BorderRouter::RoutingManager &routingManager = aNode.Get<BorderRouter::RoutingManager>();
+    Ip6::Prefix                   omrPrefix;
+    BorderRouter::RoutePreference preference;
+    String<17>                    omrPrefixString;
+
+    if (routingManager.GetFavoredOmrPrefix(omrPrefix, preference) != kErrorNone)
+    {
+        SuccessOrQuit(routingManager.GetOmrPrefix(omrPrefix));
+    }
+
+    omrPrefixString.AppendHexBytes(omrPrefix.GetBytes(), 8);
+    AddTestVar(aName, omrPrefixString.AsCString());
+#else
+    OT_UNUSED_VARIABLE(aName);
+    OT_UNUSED_VARIABLE(aNode);
+#endif
+}
+
 Core::~Core(void) { sInUse = false; }
 
 Node &Core::CreateNode(void)
@@ -250,9 +323,19 @@ Node &Core::CreateNode(void)
 
     node->GetInstance().SetId(mCurNodeId++);
 
+    if (mSaveNodeLogs)
+    {
+        node->mLogging.Init(node->GetId());
+    }
+
+    node->mInfraIf.Init(*node);
+    node->mMdns.Init(*node);
+
     mNodes.Push(*node);
 
     node->GetInstance().AfterInit();
+
+    otIp6SetReceiveCallback(&node->GetInstance(), Node::HandleIp6Receive, node);
 
     return *node;
 }
@@ -325,7 +408,7 @@ void Core::Process(Node &aNode)
     otTaskletsProcess(&aNode.GetInstance());
 
     ProcessRadio(aNode);
-    ProcessMdns(aNode);
+    ProcessInfraIf(aNode);
 #if OPENTHREAD_CONFIG_RADIO_LINK_TREL_ENABLE
     ProcessTrel(aNode);
 #endif
@@ -488,21 +571,98 @@ exit:
     return;
 }
 
-void Core::ProcessMdns(Node &aNode)
+void Core::ProcessInfraIf(Node &aNode)
 {
-    Mdns::AddressInfo senderAddress;
+    // Deliver pending packets on the infrastructure interface.
 
-    aNode.mMdns.GetAddress(senderAddress);
+    Message *message;
 
-    for (Mdns::PendingTx &pendingTx : aNode.mMdns.mPendingTxList)
+    while ((message = aNode.mInfraIf.mPendingTxQueue.GetHead()) != nullptr)
     {
+        Ip6::Header header;
+        Node       *targetNode = nullptr;
+        Heap::Data  msgData;
+
+        aNode.mInfraIf.mPendingTxQueue.Dequeue(*message);
+
+        SuccessOrQuit(message->Read(0, header));
+
+        VerifyOrQuit(message->GetLength() >= sizeof(Ip6::Header) && header.IsVersion6());
+
+        SuccessOrQuit(msgData.SetFrom(*message, 0, message->GetLength()));
+
+        {
+            InfraIf::LinkLayerAddress srcMac;
+            InfraIf::LinkLayerAddress dstMac;
+
+            aNode.mInfraIf.GetLinkLayerAddress(srcMac);
+
+            if (header.GetDestination().IsMulticast())
+            {
+                dstMac.mLength     = 6;
+                dstMac.mAddress[0] = 0x33;
+                dstMac.mAddress[1] = 0x33;
+                dstMac.mAddress[2] = header.GetDestination().mFields.m8[12];
+                dstMac.mAddress[3] = header.GetDestination().mFields.m8[13];
+                dstMac.mAddress[4] = header.GetDestination().mFields.m8[14];
+                dstMac.mAddress[5] = header.GetDestination().mFields.m8[15];
+            }
+            else
+            {
+                Node *dstNode = FindNodeByInfraIfAddress(header.GetDestination());
+
+                if (dstNode != nullptr)
+                {
+                    dstNode->mInfraIf.GetLinkLayerAddress(dstMac);
+                }
+                else
+                {
+                    dstMac.mLength = 6;
+                    memset(dstMac.mAddress, 0xff, 6);
+                }
+            }
+
+            mPcap.WritePacket(srcMac, dstMac, msgData.GetBytes(), msgData.GetLength(), mNow);
+        }
+
+        if (!header.GetDestination().IsMulticast())
+        {
+            targetNode = FindNodeByInfraIfAddress(header.GetDestination());
+        }
+
         for (Node &rxNode : mNodes)
         {
-            rxNode.mMdns.Receive(rxNode.GetInstance(), pendingTx, senderAddress);
+            if (&rxNode == &aNode)
+            {
+                continue;
+            }
+
+            if (targetNode != nullptr && &rxNode != targetNode)
+            {
+                continue;
+            }
+
+            rxNode.mInfraIf.Receive(*message);
+        }
+
+        message->Free();
+    }
+}
+
+Node *Core::FindNodeByInfraIfAddress(const Ip6::Address &aAddress)
+{
+    Node *matchedNode = nullptr;
+
+    for (Node &node : mNodes)
+    {
+        if (node.mInfraIf.HasAddress(aAddress))
+        {
+            matchedNode = &node;
+            break;
         }
     }
 
-    aNode.mMdns.mPendingTxList.Free();
+    return matchedNode;
 }
 
 #if OPENTHREAD_CONFIG_RADIO_LINK_TREL_ENABLE

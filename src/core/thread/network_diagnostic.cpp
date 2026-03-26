@@ -82,24 +82,14 @@ Error Server::AppendChildTable(Message &aMessage)
 
     for (Child &child : Get<ChildTable>().Iterate(Child::kInStateValid))
     {
-        uint8_t         timeout = 0;
-        ChildTableEntry entry;
+        ChildTableTlvEntry entry;
 
         if (++count > kMaxChildEntries)
         {
             break;
         }
 
-        while (static_cast<uint32_t>(1 << timeout) < child.GetTimeout())
-        {
-            timeout++;
-        }
-
-        entry.Clear();
-        entry.SetTimeout(timeout + 4);
-        entry.SetLinkQuality(child.GetLinkQualityIn());
-        entry.SetChildId(Mle::ChildIdFromRloc16(child.GetRloc16()));
-        entry.SetMode(child.GetDeviceMode());
+        entry.InitFrom(child);
 
         SuccessOrExit(error = aMessage.Append(entry));
         SuccessOrExit(error = Tlv::AdjustTlv(aMessage, tlvBookmark));
@@ -206,28 +196,6 @@ exit:
 }
 #endif // OPENTHREAD_CONFIG_BLE_TCAT_ENABLE
 #endif // OPENTHREAD_FTD
-
-Error Server::AppendMacCounters(Message &aMessage)
-{
-    MacCountersTlv       tlv;
-    const otMacCounters &counters = Get<Mac::Mac>().GetCounters();
-
-    ClearAllBytes(tlv);
-
-    tlv.Init();
-    tlv.SetIfInUnknownProtos(counters.mRxOther);
-    tlv.SetIfInErrors(counters.mRxErrNoFrame + counters.mRxErrUnknownNeighbor + counters.mRxErrInvalidSrcAddr +
-                      counters.mRxErrSec + counters.mRxErrFcs + counters.mRxErrOther);
-    tlv.SetIfOutErrors(counters.mTxErrCca);
-    tlv.SetIfInUcastPkts(counters.mRxUnicast);
-    tlv.SetIfInBroadcastPkts(counters.mRxBroadcast);
-    tlv.SetIfInDiscards(counters.mRxAddressFiltered + counters.mRxDestAddrFiltered + counters.mRxDuplicated);
-    tlv.SetIfOutUcastPkts(counters.mTxUnicast);
-    tlv.SetIfOutBroadcastPkts(counters.mTxBroadcast);
-    tlv.SetIfOutDiscards(counters.mTxErrBusyChannel);
-
-    return tlv.AppendTo(aMessage);
-}
 
 #if OPENTHREAD_CONFIG_BORDER_ROUTING_ENABLE
 
@@ -402,8 +370,13 @@ Error Server::AppendDiagTlv(uint8_t aTlvType, Message &aMessage)
         break;
 
     case Tlv::kMacCounters:
-        error = AppendMacCounters(aMessage);
+    {
+        MacCountersTlv tlv;
+
+        tlv.Init(Get<Mac::Mac>().GetCounters());
+        error = tlv.AppendTo(aMessage);
         break;
+    }
 
     case Tlv::kMleCounters:
     {
@@ -435,22 +408,8 @@ Error Server::AppendDiagTlv(uint8_t aTlvType, Message &aMessage)
         break;
 
     case Tlv::kChannelPages:
-    {
-        ChannelPagesTlv tlv;
-        uint8_t         length = 0;
-
-        tlv.Init();
-
-        for (uint8_t page : Radio::kSupportedChannelPages)
-        {
-            tlv.GetChannelPages()[length++] = page;
-        }
-
-        tlv.SetLength(length);
-        error = tlv.AppendTo(aMessage);
-
+        error = Tlv::Append<ChannelPagesTlv>(aMessage, Radio::kSupportedChannelPages, Radio::kNumChannelPages);
         break;
-    }
 
     case Tlv::kNonPreferredChannels:
     {
@@ -1172,17 +1131,37 @@ exit:
     return error;
 }
 
-void Client::ParseMacCounters(const MacCountersTlv &aMacCountersTlv, otNetworkDiagMacCounters &aMacCounters)
+void Client::ReadDiagData(DiagData &aDiagData, const Message &aMessage, const Tlv::Info &aTlvInfo)
 {
-    aMacCounters.mIfInUnknownProtos  = aMacCountersTlv.GetIfInUnknownProtos();
-    aMacCounters.mIfInErrors         = aMacCountersTlv.GetIfInErrors();
-    aMacCounters.mIfOutErrors        = aMacCountersTlv.GetIfOutErrors();
-    aMacCounters.mIfInUcastPkts      = aMacCountersTlv.GetIfInUcastPkts();
-    aMacCounters.mIfInBroadcastPkts  = aMacCountersTlv.GetIfInBroadcastPkts();
-    aMacCounters.mIfInDiscards       = aMacCountersTlv.GetIfInDiscards();
-    aMacCounters.mIfOutUcastPkts     = aMacCountersTlv.GetIfOutUcastPkts();
-    aMacCounters.mIfOutBroadcastPkts = aMacCountersTlv.GetIfOutBroadcastPkts();
-    aMacCounters.mIfOutDiscards      = aMacCountersTlv.GetIfOutDiscards();
+    OffsetRange offsetRange = aTlvInfo.GetValueOffsetRange();
+
+    offsetRange.ShrinkLength(GetArrayLength(aDiagData.m8));
+    aDiagData.mCount = static_cast<uint8_t>(aMessage.ReadBytes(offsetRange, aDiagData.m8));
+}
+
+Error Client::ParseChildTable(ChildTable &aChildTable, const Message &aMessage, OffsetRange aOffsetRange)
+{
+    Error error = kErrorNone;
+
+    // `ChildTable` has a fixed array of Child Table entries. If there
+    // are more entries in the message, we read and return as many as
+    // can fit in array and ignore the rest.
+
+    aChildTable.mCount = 0;
+
+    while (!aOffsetRange.IsEmpty() && (aChildTable.mCount < GetArrayLength(aChildTable.mTable)))
+    {
+        ChildTableTlvEntry entry;
+
+        SuccessOrExit(error = aMessage.Read(aOffsetRange, entry));
+        aOffsetRange.AdvanceOffset(sizeof(ChildTableTlvEntry));
+
+        entry.Parse(aChildTable.mTable[aChildTable.mCount]);
+        aChildTable.mCount++;
+    }
+
+exit:
+    return error;
 }
 
 void Client::ParseIp6AddrList(Ip6AddrList &aIp6Addrs, const Message &aMessage, OffsetRange aOffsetRange)
@@ -1272,8 +1251,7 @@ Error Client::GetNextDiagTlv(const Coap::Message &aMessage, Iterator &aIterator,
                           "NetworkData array in `otNetworkDiagTlv` is too small");
 
             VerifyOrExit(tlvInfo.GetLength() <= NetworkData::NetworkData::kMaxSize, error = kErrorParse);
-            aDiagTlv.mData.mNetworkData.mCount = static_cast<uint8_t>(tlvInfo.GetLength());
-            aMessage.ReadBytes(tlvInfo.GetValueOffsetRange(), aDiagTlv.mData.mNetworkData.m8);
+            ReadDiagData(aDiagTlv.mData.mNetworkData, aMessage, tlvInfo);
             break;
 
         case Tlv::kIp6AddressList:
@@ -1286,7 +1264,7 @@ Error Client::GetNextDiagTlv(const Coap::Message &aMessage, Iterator &aIterator,
 
             SuccessOrExit(error = aMessage.Read(offset, macCountersTlv));
             VerifyOrExit(macCountersTlv.IsValid(), error = kErrorParse);
-            ParseMacCounters(macCountersTlv, aDiagTlv.mData.mMacCounters);
+            macCountersTlv.Read(aDiagTlv.mData.mMacCounters);
             break;
         }
 
@@ -1309,45 +1287,11 @@ Error Client::GetNextDiagTlv(const Coap::Message &aMessage, Iterator &aIterator,
             break;
 
         case Tlv::kChildTable:
-        {
-            uint16_t    childInfoLength = GetArrayLength(aDiagTlv.mData.mChildTable.mTable);
-            ChildInfo  *childInfo       = &aDiagTlv.mData.mChildTable.mTable[0];
-            uint8_t    &childCount      = aDiagTlv.mData.mChildTable.mCount;
-            OffsetRange offsetRange;
-
-            VerifyOrExit((tlvInfo.GetLength() % sizeof(ChildTableEntry)) == 0, error = kErrorParse);
-
-            // `DiagTlv` has a fixed array Child Table entries. If there
-            // are more entries in the message, we read and return as
-            // many as can fit in array and ignore the rest.
-
-            childCount  = 0;
-            offsetRange = tlvInfo.GetValueOffsetRange();
-
-            while (!offsetRange.IsEmpty() && (childCount < childInfoLength))
-            {
-                ChildTableEntry entry;
-
-                SuccessOrExit(error = aMessage.Read(offsetRange, entry));
-
-                childInfo->mTimeout     = entry.GetTimeout();
-                childInfo->mLinkQuality = entry.GetLinkQuality();
-                childInfo->mChildId     = entry.GetChildId();
-                entry.GetMode().Get(childInfo->mMode);
-
-                childCount++;
-                childInfo++;
-                offsetRange.AdvanceOffset(sizeof(ChildTableEntry));
-            }
-
+            SuccessOrExit(error = ParseChildTable(aDiagTlv.mData.mChildTable, aMessage, tlvInfo.GetValueOffsetRange()));
             break;
-        }
 
         case Tlv::kChannelPages:
-            aDiagTlv.mData.mChannelPages.mCount =
-                static_cast<uint8_t>(Min(tlvInfo.GetLength(), GetArrayLength(aDiagTlv.mData.mChannelPages.m8)));
-            aMessage.ReadBytes(tlvInfo.GetValueOffset(), aDiagTlv.mData.mChannelPages.m8,
-                               aDiagTlv.mData.mChannelPages.mCount);
+            ReadDiagData(aDiagTlv.mData.mChannelPages, aMessage, tlvInfo);
             break;
 
         case Tlv::kMaxChildTimeout:
