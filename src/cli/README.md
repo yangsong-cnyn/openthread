@@ -1536,11 +1536,10 @@ The generated output encompasses the following information:
 - Version
 - Current state
 - Uptime and attach time
-- Channel
-- PAN IDs, extended MAC address, and RLOC16
+- Extended MAC address and RLOC16
+- Active Operational Dataset (redacted)
 - Unicast and multicast IPv6 address list
 - Network Data
-- Partition ID
 - Leader Data
 - Buffer info
 - Network statistics
